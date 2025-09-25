@@ -1,0 +1,862 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+import tensorflow as tf
+from tensorflow.keras.layers import Input, Embedding, Flatten
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Layer, Dense
+from functools import partial
+import pandas as pd
+from matplotlib.lines import Line2D
+from category_encoders.glmm import GLMMEncoder
+from category_encoders.woe import WOEEncoder
+from category_encoders.ordinal import OrdinalEncoder
+from sklearn.preprocessing import TargetEncoder, OneHotEncoder
+import pickle
+from sklearn.metrics import r2_score
+
+
+def target_encoding(feature, target, df):
+    dictionary_target_encoding = {}
+    categories = df[feature].unique()
+    changed_df = df.copy()
+    for cat in categories:
+        which_cat = df[df[feature] == cat]
+        avg_value = np.sum(which_cat[target]) / len(which_cat)
+        changed_df[feature] = changed_df[feature].replace([cat], avg_value)
+        dictionary_target_encoding[cat] = avg_value
+    return changed_df, dictionary_target_encoding
+
+def split_inputs(x, y, categorical_variables):
+  how_many_cat_variables = len(categorical_variables)
+  dictionary = {}
+  for index in range(how_many_cat_variables):
+    # dictionary[categorical_variables[index]] = [x[index], x[how_many_cat_variables+index]]
+    dictionary[categorical_variables[index]] = [x[index], x[how_many_cat_variables+index], x[2*how_many_cat_variables+index], x[3*how_many_cat_variables+index]]
+  # dictionary['rest'] = x[2*how_many_cat_variables:]
+  dictionary['rest'] = x[4*how_many_cat_variables:]
+  return (dictionary, y)
+
+
+def split_inputs_encoder(x, y):
+  return ({'all':x}, y)
+
+def split_inputs_onehot(x, y, categorical_variables, how_many_cat_percolumn):
+  how_many_cat_variables = len(categorical_variables)
+  dictionary = {}
+  how_many_so_far = 0
+  for index in range(how_many_cat_variables):
+    dictionary[categorical_variables[index]] = x[how_many_so_far : how_many_so_far + how_many_cat_percolumn[index]]
+    how_many_so_far += how_many_cat_percolumn[index]
+  dictionary['rest'] = x[how_many_so_far:]
+  return (dictionary, y)
+
+
+
+
+class MyLayer(Layer):
+    def call(self, small_models_outputs, inputs):
+        return tf.concat([*small_models_outputs.values(), inputs['rest']], axis=-1)
+
+
+class SmallNetwork(Layer):
+
+    def __init__(self, units, activation='sigmoid', **kwargs):
+        super().__init__(**kwargs)
+        self.units = units
+        self.activation = activation
+
+    def build(self, input_shape):
+        self.dense_layers = []
+
+        for units in self.units:
+            self.dense_layers.append(Dense(units, activation=self.activation, kernel_initializer=tf.keras.initializers.Zeros()))
+            # self.dense_layers.append(Dropout(0.2))
+
+    def call(self, inputs):
+        h = inputs
+        for dense_layer in self.dense_layers:
+            h = dense_layer(h)
+        return h
+
+
+
+def calculate_relative_entropy(series):
+  """Calculates normalised entropy for a pandas Series (categorical feature)."""
+  value_counts = series.value_counts(normalize=True)
+  entropy = -np.sum(value_counts * np.log2(value_counts))
+  cardinality = len(value_counts)
+  if cardinality <= 1:
+    return 0.0
+  return entropy / np.log2(cardinality)
+
+beta_1 = 0.1
+beta_2 = -0.15
+beta_3 = 0.2
+beta_4 = 0.3
+
+
+total_epochs = 250
+which_open = '/home/ir318/trial_experiments/'
+
+
+# Create labels for x1_binned
+
+dictionary_results = {}
+dictionary_results_tarreg = {}
+dictionary_results_joechar1 = {}
+dictionary_results_joechar2 = {}
+dictionary_results_joeohe1 = {}
+dictionary_results_joeohe2 = {}
+dictionary_results_woe = {}
+dictionary_results_glmm = {}
+dictionary_results_onehot = {}
+dictionary_results_ordinal  = {}
+dictionary_results_continuous = {'est_b1':[],'est_b2':[],'est_b3':[]}
+dictionary_results_nocat = {'est_b1':[],'est_b2':[],'est_b3':[]}
+dictionary_nr_obs_cat = {}
+dictionary_relative_entropy = {}
+
+
+
+
+dictionary_performance = {}
+dictionary_performance_tarreg = {}
+dictionary_performance_joechar1 = {}
+dictionary_performance_joechar2 = {}
+dictionary_performance_joeohe1 = {}
+dictionary_performance_joeohe2 = {}
+dictionary_performance_glmm = {}
+dictionary_performance_onehot = {}
+dictionary_performance_woe = {}
+dictionary_performance_ordinal = {}
+dictionary_performance_continuous = {'rmse':[],'mae':[],'rsq':[]}
+dictionary_performance_nocat = {'rmse':[],'mae':[],'rsq':[]}
+
+
+# # ### simulate a multivariate normal
+X = np.random.multivariate_normal([0,0,0], np.identity(3),20000)
+
+
+
+
+x_1 = X[:,0]
+x_2 = X[:,1]
+x_3 = X[:,2]
+
+
+
+linear_combination = beta_1 * x_1 + beta_2 * x_2 + beta_3 * x_3 + beta_4 * x_1 * x_2 
+y = linear_combination + np.random.normal(0, 0.3, 20000)
+
+
+
+target_variable = 'y'
+categorical_variables = ['x_1']
+continuous_variables = ['x_2', 'x_3']
+binary_variables = []
+
+
+indices_test = random.sample(range(20000), 10000)
+
+
+
+list_nr_bins = [50, 100, 150, 200, 250, 300]
+
+
+for each_nr_bins in list_nr_bins:
+  dictionary_results[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_tarreg[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_joechar1[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_joechar2[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_joeohe1[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_joeohe2[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_onehot[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_glmm[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_woe[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+  dictionary_results_ordinal[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
+
+
+
+  dictionary_performance[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_tarreg[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_joechar1[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_joechar2[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_glmm[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_joeohe1[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_joeohe2[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_onehot[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_woe[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_performance_ordinal[each_nr_bins] = {'rmse':[],'mae':[],'rsq':[],'correlation':[],'rmse_dec':[],'mae_dec':[],'rsq_dec':[]}
+  dictionary_nr_obs_cat[each_nr_bins] = []
+  dictionary_relative_entropy[each_nr_bins] = []
+
+
+for i in range(50):
+
+  print('REPETITION NUMBER '+str(i+1))
+
+
+  for nr_bins_x1 in list_nr_bins:
+
+    print(nr_bins_x1)
+
+    labels_x1 = [f'C_{{1,{i}}}' for i in range(nr_bins_x1)]
+    
+
+    # Use the correct labels for each binned variable
+    x1_binned = pd.cut(x_1, bins=nr_bins_x1, labels=labels_x1).astype(str)
+
+    df = pd.DataFrame({'x_1': x1_binned, 'x_2': x_2, 'x_3': x_3, 'y': y})
+    df_test = df.iloc[indices_test]
+    df_all_train = df.drop(indices_test)
+    df_train = df_all_train.sample(n = 1000)
+
+    train_sample_indices = df_train.index
+
+    df_cont = pd.DataFrame({'x_1': x_1, 'x_2': x_2, 'x_3': x_3, 'y': y})
+    df_test_cont = df_cont.iloc[indices_test]
+    df_all_train_cont = df_cont.drop(indices_test)
+    df_train_cont = df_all_train_cont.loc[train_sample_indices]
+
+    nr_obs_cat =len(df_train['x_1'].unique())
+    dictionary_nr_obs_cat[nr_bins_x1].append(nr_obs_cat)
+
+
+    relative_entropy = calculate_relative_entropy(df_train['x_1'])
+    dictionary_relative_entropy[nr_bins_x1].append(relative_entropy)
+
+
+
+    #### CONTINUOUS
+    model_cont = LinearRegression()
+    model_cont.fit(df_train_cont.drop('y', axis=1), df_train_cont['y'])
+    y_pred_cont = model_cont.predict(df_test_cont.drop('y', axis=1))
+    dictionary_results_continuous['est_b1'].append(model_cont.coef_[0])
+    dictionary_results_continuous['est_b2'].append(model_cont.coef_[1])
+    dictionary_results_continuous['est_b3'].append(model_cont.coef_[2])
+    dictionary_performance_continuous['rmse'].append(np.sqrt(np.mean((y_pred_cont - df_test_cont['y'])**2)))
+    dictionary_performance_continuous['mae'].append(np.mean(np.abs(y_pred_cont - df_test_cont['y'])))
+    dictionary_performance_continuous['rsq'].append(r2_score(df_test_cont['y'], y_pred_cont))
+
+
+
+
+
+    ### no categorical features
+    model_nocat = LinearRegression()
+    model_nocat.fit(df_train.drop(['x_1','y'], axis=1), df_train['y'])
+    y_pred_nocat = model_nocat.predict(df_test.drop(['x_1','y'], axis=1))
+    dictionary_results_nocat['est_b1'].append([])
+    dictionary_results_nocat['est_b2'].append(model_nocat.coef_[0])
+    dictionary_results_nocat['est_b3'].append(model_nocat.coef_[1])
+
+    dictionary_performance_nocat['rmse'].append(np.sqrt(np.mean((y_pred_nocat - df_test['y'])**2)))
+    dictionary_performance_nocat['mae'].append(np.mean(np.abs(y_pred_nocat - df_test['y'])))
+    dictionary_performance_nocat['rsq'].append(r2_score(df_test['y'], y_pred_nocat))
+
+
+    ### SIMPLE TARGET
+    target_df = df_train.copy()
+    target_df_test = df_test.copy()
+
+    prior = np.mean(df_train[target_variable])
+    for col in categorical_variables:
+        target_df, dict_target =  target_encoding(col, target_variable, target_df)
+        target_df[col] = target_df[col].astype('float')
+        target_df_test[col] = target_df_test[col].replace(list(dict_target.keys()), list(dict_target.values()))
+        unique_test_no_train = list(set(df_test[col]) - set(df_train[col]))
+        for uni in unique_test_no_train:
+            target_df_test.loc[target_df_test[col] == uni, col] = prior
+        target_df_test[col] = target_df_test[col].astype('float')
+    X_train_target = target_df.drop('y', axis=1)
+    y_train_target = target_df['y']
+    X_test_target = target_df_test.drop('y', axis=1)
+    y_test_target = target_df_test['y']
+    model = LinearRegression()
+    model.fit(X_train_target, y_train_target)
+    dictionary_results[nr_bins_x1]['est_b1'].append(model.coef_[0])
+    dictionary_results[nr_bins_x1]['est_b2'].append(model.coef_[1])
+    dictionary_results[nr_bins_x1]['est_b3'].append(model.coef_[2])
+    y_pred = model.predict(X_test_target)
+    dictionary_performance[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_test_target - y_pred)**2)))
+    dictionary_performance[nr_bins_x1]['mae'].append(np.mean(np.abs(y_test_target - y_pred)))
+    dictionary_performance[nr_bins_x1]['rsq'].append(1 - np.sum((y_test_target - y_pred)**2) / np.sum((y_test_target - np.mean(y_test_target))**2))
+    dictionary_performance[nr_bins_x1]['rsq'].append(r2_score(y_test_target, y_pred))
+
+    dictionary_performance[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_target[categorical_variables[0]], df_train_cont[categorical_variables[0]])[0,1])
+
+
+
+    ### GLMM
+    encoder_glmm = GLMMEncoder(cols=['x_1'])
+    encoder_glmm.fit(df_train[['x_1']], df_train['y'])
+    df_train_encoded_glmm = df_train.copy()
+    df_test_encoded_glmm = df_test.copy()
+    df_train_encoded_glmm[['x_1']] = encoder_glmm.transform(df_train[['x_1']])
+    df_test_encoded_glmm[['x_1']] = encoder_glmm.transform(df_test[['x_1']])
+    X_train_glmm = df_train_encoded_glmm.drop('y', axis=1)
+    y_train_glmm = df_train_encoded_glmm['y']
+    X_test_glmm = df_test_encoded_glmm.drop('y', axis=1)
+    y_test_glmm = df_test_encoded_glmm['y']
+    model_glmm = LinearRegression()
+    model_glmm.fit(X_train_glmm, y_train_glmm)
+    y_pred_glmm = model_glmm.predict(X_test_glmm)
+    dictionary_results_glmm[nr_bins_x1]['est_b1'].append(model_glmm.coef_[0])
+    dictionary_results_glmm[nr_bins_x1]['est_b2'].append(model_glmm.coef_[1])
+    dictionary_results_glmm[nr_bins_x1]['est_b3'].append(model_glmm.coef_[2])
+    dictionary_performance_glmm[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_test_glmm - y_pred_glmm)**2)))
+    dictionary_performance_glmm[nr_bins_x1]['mae'].append(np.mean(np.abs(y_test_glmm - y_pred_glmm)))
+    dictionary_performance_glmm[nr_bins_x1]['rsq'].append(r2_score(y_test_glmm, y_pred_glmm))
+    dictionary_performance_glmm[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_glmm[categorical_variables[0]], df_train_cont[categorical_variables[0]])[0,1])
+
+
+
+
+
+
+    ### TAR REGULARISATION
+    target_encoder = TargetEncoder(target_type='continuous', smooth='auto', cv=5)
+    target_encoder.fit(df_train[['x_1']], df_train['y'])
+    df_train_encoded_tarreg = df_train.copy()
+    df_test_encoded_tarreg = df_test.copy()
+    df_train_encoded_tarreg[['x_1']] = target_encoder.transform(df_train[['x_1']])
+    df_test_encoded_tarreg[['x_1']] = target_encoder.transform(df_test[['x_1']])
+    X_train_tarreg = df_train_encoded_tarreg.drop('y', axis=1)
+    y_train_tarreg = df_train_encoded_tarreg['y']
+    X_test_tarreg = df_test_encoded_tarreg.drop('y', axis=1)
+    y_test_tarreg = df_test_encoded_tarreg['y']
+    model_tarreg = LinearRegression()
+    model_tarreg.fit(X_train_tarreg, y_train_tarreg)
+    y_pred_tarreg = model_tarreg.predict(X_test_tarreg)
+
+
+    dictionary_results_tarreg[nr_bins_x1]['est_b1'].append(model_tarreg.coef_[0])
+    dictionary_results_tarreg[nr_bins_x1]['est_b2'].append(model_tarreg.coef_[1])
+    dictionary_results_tarreg[nr_bins_x1]['est_b3'].append(model_tarreg.coef_[2])
+    y_pred_sklearn_te = model_tarreg.predict(X_test_tarreg)
+    dictionary_performance_tarreg[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_test_tarreg - y_pred_sklearn_te)**2)))
+    dictionary_performance_tarreg[nr_bins_x1]['mae'].append(np.mean(np.abs(y_test_tarreg - y_pred_sklearn_te)))
+    dictionary_performance_tarreg[nr_bins_x1]['rsq'].append(r2_score(y_test_tarreg, y_pred_sklearn_te))
+    dictionary_performance_tarreg[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_tarreg[categorical_variables[0]], df_train_cont[categorical_variables[0]])[0,1])
+
+
+    ### ordinal encoding
+    encoder_oe = OrdinalEncoder(cols=['x_1'])
+    encoder_oe.fit(df_train[['x_1']], df_train['y'])
+    df_train_encoded_oe = df_train.copy()
+    df_test_encoded_oe = df_test.copy()
+    df_train_encoded_oe[['x_1']] = encoder_oe.transform(df_train[['x_1']])
+    df_test_encoded_oe[['x_1']] = encoder_oe.transform(df_test[['x_1']])
+    X_train_oe = df_train_encoded_oe.drop('y', axis=1)
+    y_train_oe = df_train_encoded_oe['y']
+    X_test_oe = df_test_encoded_oe.drop('y', axis=1)
+    y_test_oe = df_test_encoded_oe['y']
+    model_oe = LinearRegression()
+    model_oe.fit(X_train_oe, y_train_oe)
+    y_pred_oe = model_oe.predict(X_test_oe)
+    dictionary_results_ordinal[nr_bins_x1]['est_b1'].append(model_oe.coef_[0])
+    dictionary_results_ordinal[nr_bins_x1]['est_b2'].append(model_oe.coef_[1])
+    dictionary_results_ordinal[nr_bins_x1]['est_b3'].append(model_oe.coef_[2])
+    dictionary_performance_ordinal[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_test_oe - y_pred_oe)**2)))
+    dictionary_performance_ordinal[nr_bins_x1]['mae'].append(np.mean(np.abs(y_test_oe - y_pred_oe)))
+    dictionary_performance_ordinal[nr_bins_x1]['rsq'].append(r2_score(y_test_oe, y_pred_oe))
+    dictionary_performance_ordinal[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_oe[categorical_variables[0]], df_train_cont[categorical_variables[0]])[0,1])
+
+    ### one hot encoding
+    encoder_onehot = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+    encoder_onehot.fit(df_train[['x_1']])
+
+    encoded_train_x1 = encoder_onehot.transform(df_train[['x_1']])
+    encoded_test_x1 = encoder_onehot.transform(df_test[['x_1']])
+
+    df_train_encoded_x1 = pd.DataFrame(encoded_train_x1, columns=encoder_onehot.get_feature_names_out(['x_1']), index=df_train.index)
+    df_test_encoded_x1 = pd.DataFrame(encoded_test_x1, columns=encoder_onehot.get_feature_names_out(['x_1']), index=df_test.index)
+
+    df_train_encoded_onehot = pd.concat([df_train.drop('x_1', axis=1), df_train_encoded_x1], axis=1)
+    df_test_encoded_onehot = pd.concat([df_test.drop('x_1', axis=1), df_test_encoded_x1], axis=1)
+
+    X_train_onehot = df_train_encoded_onehot.drop('y', axis=1)
+    y_train_onehot = df_train_encoded_onehot['y']
+    X_test_onehot = df_test_encoded_onehot.drop('y', axis=1)
+    y_test_onehot = df_test_encoded_onehot['y']
+
+    model_onehot = LinearRegression()
+    model_onehot.fit(X_train_onehot, y_train_onehot)
+    y_pred_onehot = model_onehot.predict(X_test_onehot)
+
+    dictionary_performance_onehot[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_test_onehot - y_pred_onehot)**2)))
+    dictionary_performance_onehot[nr_bins_x1]['mae'].append(np.mean(np.abs(y_test_onehot - y_pred_onehot)))
+    dictionary_performance_onehot[nr_bins_x1]['rsq'].append(r2_score(y_test_onehot, y_pred_onehot))
+
+
+
+    list_columns = []
+    list_datasets = {}
+    dictionary_all_categorical_columns_positives = {}
+    dictionary_all_categorical_columns_negatives = {}
+    dictionary_all_categorical_columns_overallmean = {} #added
+    dictionary_all_categorical_columns_overallstd = {} #added
+
+
+    for which_column_to_categories in categorical_variables:
+      categories = df[which_column_to_categories].unique().tolist()
+      dict_whichcolumn_pos = {}
+      dict_whichcolumn_neg = {}
+      dict_whichcolumn_overallmean = {} #added
+      dict_whichcolumn_overallstd = {} #added
+      overall_mean = np.mean(df_train[target_variable])
+      overall_std = np.std(df_train[target_variable])
+      for cat in categories:
+          which_cat = df_train[df_train[which_column_to_categories] == cat]
+          if which_cat.shape[0] >= 1:
+              dict_whichcolumn_pos[cat] = np.mean(which_cat[target_variable])
+              dict_whichcolumn_neg[cat] = np.std(which_cat[target_variable])
+              dict_whichcolumn_overallmean[cat] = overall_mean #added
+              dict_whichcolumn_overallstd[cat] = overall_std #added
+          else:
+              dict_whichcolumn_pos[cat] = 0
+              dict_whichcolumn_neg[cat] = 0
+              dict_whichcolumn_overallmean[cat] = overall_mean #added
+              dict_whichcolumn_overallstd[cat] = overall_std #added
+
+      dictionary_all_categorical_columns_positives[which_column_to_categories] = dict_whichcolumn_pos
+      dictionary_all_categorical_columns_negatives[which_column_to_categories] = dict_whichcolumn_neg
+      dictionary_all_categorical_columns_overallmean[which_column_to_categories] = dict_whichcolumn_overallmean #added
+      dictionary_all_categorical_columns_overallstd[which_column_to_categories] = dict_whichcolumn_overallstd #added
+      list_columns.append(which_column_to_categories+str('_P'))
+
+    X_train, y_train =  df_train.drop('y', axis=1), df_train['y']
+    X_test, y_test = df_test.drop('y', axis=1), df_test['y']
+    X_train_mod_1 = X_train.copy()
+    X_test_mod_1 = X_test.copy()
+
+    for which_column_to_categories in categorical_variables:
+      X_train_mod_1[which_column_to_categories+str('_N')] = X_train_mod_1[which_column_to_categories].copy()
+      X_train_mod_1[which_column_to_categories+str('_OM')] = X_train_mod_1[which_column_to_categories].copy()
+      X_train_mod_1[which_column_to_categories+str('_OS')] = X_train_mod_1[which_column_to_categories].copy()
+      X_train_mod_1.rename(columns={which_column_to_categories: which_column_to_categories+str('_P')}, inplace=True)
+
+      X_test_mod_1[which_column_to_categories+str('_N')] = X_test_mod_1[which_column_to_categories].copy()
+      X_test_mod_1[which_column_to_categories+str('_OM')] = X_test_mod_1[which_column_to_categories].copy()
+      X_test_mod_1[which_column_to_categories+str('_OS')] = X_test_mod_1[which_column_to_categories].copy()
+      X_test_mod_1.rename(columns={which_column_to_categories: which_column_to_categories+str('_P')}, inplace=True)
+
+      dic_pos = dictionary_all_categorical_columns_positives[which_column_to_categories]
+      dic_neg = dictionary_all_categorical_columns_negatives[which_column_to_categories]
+      dic_overallmean = dictionary_all_categorical_columns_overallmean[which_column_to_categories]
+      dic_overallstd = dictionary_all_categorical_columns_overallstd[which_column_to_categories]
+
+      test_this_column = pd.DataFrame(columns=['cat','mean','std','o_m','o_s'])
+
+
+      for cat in dic_pos.keys():
+        n = dic_neg[cat]
+        p = dic_pos[cat]
+        o_mean = dic_overallmean[cat]
+        o_std = dic_overallstd[cat]
+        X_train_mod_1[which_column_to_categories+str('_N')] =   X_train_mod_1[which_column_to_categories+str('_N')].replace(cat, n)
+        X_train_mod_1[which_column_to_categories+str('_P')] =   X_train_mod_1[which_column_to_categories+str('_P')].replace(cat, p)
+        X_train_mod_1[which_column_to_categories+str('_OM')] =   X_train_mod_1[which_column_to_categories+str('_OM')].replace(cat, o_mean)
+        X_train_mod_1[which_column_to_categories+str('_OS')] =   X_train_mod_1[which_column_to_categories+str('_OS')].replace(cat, o_std)
+        X_test_mod_1[which_column_to_categories+str('_N')] = X_test_mod_1[which_column_to_categories+str('_N')].replace(cat, n)
+        X_test_mod_1[which_column_to_categories+str('_P')] = X_test_mod_1[which_column_to_categories+str('_P')].replace(cat, p)
+        X_test_mod_1[which_column_to_categories+str('_OM')] = X_test_mod_1[which_column_to_categories+str('_OM')].replace(cat, o_mean)
+        X_test_mod_1[which_column_to_categories+str('_OS')] = X_test_mod_1[which_column_to_categories+str('_OS')].replace(cat, o_std)
+        test_this_column = test_this_column._append({'cat':cat,'mean': p, 'std': n, 'o_m': o_mean, 'o_s':o_std},ignore_index=True)
+
+      list_datasets[which_column_to_categories] = test_this_column
+      list_columns.append(which_column_to_categories+str('_N'))
+
+    for which_column_to_categories in categorical_variables:
+      list_columns.append(which_column_to_categories+str('_OM'))
+    for which_column_to_categories in categorical_variables:
+      list_columns.append(which_column_to_categories+str('_OS'))
+
+    list_columns = list_columns+continuous_variables+binary_variables
+
+    X_train_mod_1 = X_train_mod_1[list_columns]
+    X_test_mod_1 = X_test_mod_1[list_columns]
+
+
+    train_ds = tf.data.Dataset.from_tensor_slices((X_train_mod_1.values.astype(np.float32), y_train.values))
+    test_ds = tf.data.Dataset.from_tensor_slices((X_test_mod_1.values.astype(np.float32),  y_test.values))
+    f = partial(split_inputs, categorical_variables=categorical_variables)
+    train_ds = train_ds.map(f)
+    test_ds = test_ds.map(f)
+
+    train_ds = train_ds.shuffle(500).batch(32)
+    test_ds = test_ds.batch(32)
+
+
+    for combination in [ [[3,1],'sigmoid'], [[1],'linear']]:
+      hidden_layers = combination[0]
+      encod_act = combination[1]
+
+      small_models = {}
+      inputs = {}
+      for i in range(len(categorical_variables)):
+        small_models[categorical_variables[i]] = SmallNetwork(hidden_layers, encod_act)
+        inputs[categorical_variables[i]] = Input(shape=(4,), name = str(categorical_variables[i]))
+
+      inputs['rest'] = Input(shape=(len(binary_variables)+len(continuous_variables),), name = 'rest')
+      small_models_outputs = {k: small_models[k](inputs[k]) for k in categorical_variables}
+      h =  MyLayer()(small_models_outputs, inputs)
+
+      initializer = tf.keras.initializers.GlorotUniform(seed=50)
+
+      opt = 'adam'
+
+
+      outputs = Dense(1, activation='linear', kernel_initializer = initializer)(h)
+      if combination == [ [3,1],'sigmoid']:
+        name = 'JoeChar3Sig'
+        model1 = Model(inputs=inputs, outputs=outputs)
+        model1.compile(loss='mse', optimizer=opt)
+        history1 = model1.fit(train_ds, epochs = total_epochs, validation_data= test_ds,validation_freq=10, callbacks=[], verbose = 0)
+        y_pred_keras = model1.predict(test_ds).flatten()
+
+        ## calculate rmse, mae and rsq
+        rmse_joechar1 = np.sqrt(np.mean((y_pred_keras - y_test.values)**2))
+        mae_joechar1 = np.mean(np.abs(y_pred_keras - y_test.values))
+
+        dictionary_performance_joechar1[nr_bins_x1]['rmse'].append(rmse_joechar1)
+        dictionary_performance_joechar1[nr_bins_x1]['mae'].append(mae_joechar1)
+        dictionary_performance_joechar1[nr_bins_x1]['rsq'].append(r2_score(y_test, y_pred_keras))
+
+
+
+        dictionary_results_joechar1[nr_bins_x1]['est_b1'].append(model1.get_weights()[-2][0][0])
+        dictionary_results_joechar1[nr_bins_x1]['est_b2'].append(model1.get_weights()[-2][1][0])
+        dictionary_results_joechar1[nr_bins_x1]['est_b3'].append(model1.get_weights()[-2][2][0])
+
+
+      else:
+        model2 = Model(inputs=inputs, outputs=outputs)
+        name = 'JoeChar1Lin'
+        # model2.compile(loss='binary_crossentropy', optimizer=opt, metrics=[keras.metrics.BinaryAccuracy(),  tf.keras.metrics.AUC(curve = which_curve,name = 'auc') ])
+        model2.compile(loss='mse', optimizer=opt)
+        history2 = model2.fit(train_ds, epochs = total_epochs, validation_data= test_ds,validation_freq=10, callbacks=[], verbose = 0)
+        y_pred_keras = model2.predict(test_ds).flatten()
+
+        rmse_joechar2 = np.sqrt(np.mean((y_pred_keras - y_test.values)**2))
+        mae_joechar2 = np.mean(np.abs(y_pred_keras - y_test.values))
+
+        dictionary_performance_joechar2[nr_bins_x1]['rmse'].append(rmse_joechar2)
+        dictionary_performance_joechar2[nr_bins_x1]['mae'].append(mae_joechar2)
+        dictionary_performance_joechar2[nr_bins_x1]['rsq'].append(r2_score(y_test, y_pred_keras))
+
+
+        dictionary_results_joechar2[nr_bins_x1]['est_b1'].append(model2.get_weights()[-2][0][0])
+        dictionary_results_joechar2[nr_bins_x1]['est_b2'].append(model2.get_weights()[-2][1][0])
+        dictionary_results_joechar2[nr_bins_x1]['est_b3'].append(model2.get_weights()[-2][2][0])
+
+    
+
+      for cat in categorical_variables:
+        select_dataset = list_datasets[cat]
+        select_dataset[name] = 0
+        for i in range(select_dataset.shape[0]):
+          mean = select_dataset['mean'].iloc[i]
+          std = select_dataset['std'].iloc[i]
+          om = select_dataset['o_m'].iloc[i]
+          os = select_dataset['o_s'].iloc[i]
+
+          tensor_to_use = tf.constant([[mean,std, om, os]])
+
+
+          select_dataset.loc[i, name] = small_models[cat](tensor_to_use).numpy()
+
+
+        list_datasets[cat] = select_dataset
+
+      X_train_encoded_usingM1 = X_train.copy()
+      X_test_encoded_usingM1 = X_test.copy()
+      for index_cat in range(len(categorical_variables)):
+        X_train_encoded_usingM1[categorical_variables[index_cat]] = X_train_encoded_usingM1[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].values, list_datasets[categorical_variables[index_cat]][name].values)
+        X_test_encoded_usingM1[categorical_variables[index_cat]] = X_test_encoded_usingM1[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].values, list_datasets[categorical_variables[index_cat]][name].values)
+
+ 
+
+
+      if name == 'JoeChar3Sig':
+        dictionary_performance_joechar1[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM1[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
+      else:
+        dictionary_performance_joechar2[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM1[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
+
+
+    ###### one hot encoding
+    encoded_onehot_categories = {}
+    train_objs_num = X_train.shape[0]
+    test_objs_num = X_test.shape[0]
+    keys = []
+    X_train_mod_one_hot = X_train[binary_variables + continuous_variables].copy()
+    X_test_mod_one_hot = X_test[binary_variables + continuous_variables].copy()
+
+
+
+    how_many_cat_percolumn = []
+    how_many_cat_percolumn_everything = []
+    for cat in categorical_variables:
+      dataset = pd.concat(objs=[X_train[cat], X_test[cat],list_datasets[cat]['cat']], axis=0)
+      # dataset = pd.concat(objs=[X_train[cat], X_test[cat]], axis=0)
+      dataset_preprocessed = pd.get_dummies(dataset)
+      train_preprocessed = dataset_preprocessed[:train_objs_num]
+      test_preprocessed = dataset_preprocessed[train_objs_num:train_objs_num+test_objs_num]
+      encoded_onehot_categories[cat] = dataset_preprocessed[train_objs_num+test_objs_num:]
+      how_many_categories = train_preprocessed.shape[1]
+      keys += [cat+'_one_hot_'+str(i) for i in range(1,how_many_categories+1)]
+      X_train_mod_one_hot = pd.concat([X_train_mod_one_hot, train_preprocessed], axis = 1)
+      X_train_mod_one_hot.columns = binary_variables + continuous_variables + keys
+      X_test_mod_one_hot = pd.concat([X_test_mod_one_hot, test_preprocessed], axis = 1)
+      X_test_mod_one_hot.columns = binary_variables + continuous_variables + keys
+      how_many_cat_percolumn.append(how_many_categories)
+      how_many_cat_percolumn_everything.append(how_many_categories+2)
+
+
+
+    X_train_mod_one_hot = X_train_mod_one_hot[keys + binary_variables + continuous_variables]
+    X_test_mod_one_hot = X_test_mod_one_hot[keys + binary_variables + continuous_variables]
+
+    X_train_mod_one_hot= X_train_mod_one_hot.values
+    X_test_mod_one_hot = X_test_mod_one_hot.values
+
+    train_ds_onehot = tf.data.Dataset.from_tensor_slices((X_train_mod_one_hot.astype(np.float32), y_train))
+    test_ds_onehot = tf.data.Dataset.from_tensor_slices((X_test_mod_one_hot.astype(np.float32), y_test))
+
+    f = partial(split_inputs_onehot, categorical_variables=categorical_variables, how_many_cat_percolumn = how_many_cat_percolumn)
+    train_ds_onehot = train_ds_onehot.map(f)
+    test_ds_onehot = test_ds_onehot.map(f)
+    train_ds_onehot = train_ds_onehot.batch(32)
+    test_ds_onehot = test_ds_onehot.batch(32)
+
+
+    #### bigger model joe ohe
+
+    for combination in [[[3,1],'sigmoid'], [[1],'linear']]:
+      hidden_layers = combination[0]
+      encod_act = combination[1]
+      small_models_onehot = {}
+      inputs_onehot = {}
+      for i in range(len(categorical_variables)):
+        small_models_onehot[categorical_variables[i]] = SmallNetwork(hidden_layers, encod_act)
+        inputs_onehot[categorical_variables[i]] = Input(shape=(how_many_cat_percolumn[i],), name = str(categorical_variables[i]))
+      inputs_onehot['rest'] = Input(shape=(len(binary_variables)+len(continuous_variables),), name = 'rest')
+      small_models_outputs_onehot = {k: small_models_onehot[k](inputs_onehot[k]) for k in categorical_variables}
+      h = MyLayer()(small_models_outputs_onehot, inputs_onehot)
+
+      initializer = tf.keras.initializers.GlorotUniform(seed=50)
+
+      outputs_onehot = Dense(1, activation='linear', kernel_initializer = initializer)(h)
+
+      opt = 'adam'
+
+
+      if combination == [ [3,1],'sigmoid']:
+        model_onehot1 = Model(inputs=inputs_onehot, outputs=outputs_onehot)
+        model_onehot1.compile(loss='mse', optimizer=opt)
+        history_joeohe1 = model_onehot1.fit(train_ds_onehot, epochs = total_epochs, validation_data= test_ds_onehot,validation_freq=10,verbose = 0)
+
+        y_pred_keras = model_onehot1.predict(test_ds_onehot).flatten()
+        dictionary_performance_joeohe1[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_pred_keras - y_test.values)**2)))
+        dictionary_performance_joeohe1[nr_bins_x1]['mae'].append(np.mean(np.abs(y_pred_keras - y_test.values)))
+        dictionary_performance_joeohe1[nr_bins_x1]['rsq'].append(r2_score(y_test, y_pred_keras))
+
+
+        dictionary_results_joeohe1[nr_bins_x1]['est_b1'].append(model_onehot1.get_weights()[-2][0][0])
+        dictionary_results_joeohe1[nr_bins_x1]['est_b2'].append(model_onehot1.get_weights()[-2][1][0])
+        dictionary_results_joeohe1[nr_bins_x1]['est_b3'].append(model_onehot1.get_weights()[-2][2][0])
+        
+        for cat in categorical_variables:
+          select_dataset = encoded_onehot_categories[cat].copy()
+          select_dataset[name] = 0
+          for i in range(select_dataset.shape[0]):
+            see = list(select_dataset.iloc[i,:-1].values)
+            select_dataset[name].iloc[i] = small_models_onehot[cat](tf.constant([see])).numpy()
+          list_datasets[cat][name] = select_dataset[name]
+
+        X_train_encoded_usingM6 = X_train.copy()
+        X_test_encoded_usingM6 = X_test.copy()
+
+        for index_cat in range(len(categorical_variables)):
+          X_train_encoded_usingM6[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].tolist(), list_datasets[categorical_variables[index_cat]][name].tolist(), inplace=True)
+          X_test_encoded_usingM6[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].tolist(), list_datasets[categorical_variables[index_cat]][name].tolist(), inplace=True)
+
+        dictionary_performance_joeohe1[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM6[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
+
+
+
+      else:
+        model_onehot2 = Model(inputs=inputs_onehot, outputs=outputs_onehot)
+        model_onehot2.compile(loss='mse', optimizer=opt)
+
+        history_joeohe2 = model_onehot2.fit(train_ds_onehot, epochs = total_epochs, validation_data= test_ds_onehot,validation_freq=10,verbose = 0)
+
+
+        #### calculate accuracy, auc and f1 score
+        y_pred_keras = model_onehot2.predict(test_ds_onehot).flatten()
+        dictionary_performance_joeohe2[nr_bins_x1]['rmse'].append(np.sqrt(np.mean((y_pred_keras - y_test.values)**2)))
+        dictionary_performance_joeohe2[nr_bins_x1]['mae'].append(np.mean(np.abs(y_pred_keras - y_test.values)))
+        dictionary_performance_joeohe2[nr_bins_x1]['rsq'].append(r2_score(y_test, y_pred_keras))
+
+        dictionary_results_joeohe2[nr_bins_x1]['est_b1'].append(model_onehot2.get_weights()[-2][0][0])
+        dictionary_results_joeohe2[nr_bins_x1]['est_b2'].append(model_onehot2.get_weights()[-2][1][0])
+        dictionary_results_joeohe2[nr_bins_x1]['est_b3'].append(model_onehot2.get_weights()[-2][2][0])
+
+        for cat in categorical_variables:
+          select_dataset = encoded_onehot_categories[cat].copy()
+          select_dataset[name] = 0
+          for i in range(select_dataset.shape[0]):
+            see = list(select_dataset.iloc[i,:-1].values)
+            select_dataset[name].iloc[i] = small_models_onehot[cat](tf.constant([see])).numpy()
+          list_datasets[cat][name] = select_dataset[name]
+
+        X_train_encoded_usingM6 = X_train.copy()
+        X_test_encoded_usingM6 = X_test.copy()
+
+        for index_cat in range(len(categorical_variables)):
+          X_train_encoded_usingM6[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].tolist(), list_datasets[categorical_variables[index_cat]][name].tolist(), inplace=True)
+          X_test_encoded_usingM6[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].tolist(), list_datasets[categorical_variables[index_cat]][name].tolist(), inplace=True)
+
+        dictionary_performance_joeohe2[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM6[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
+
+
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
+
+
+method_colors = {
+    'Reg Target': 'blue',
+    'Simple Target': 'orange',
+    'GLMM': 'green',
+    'Ordinal': 'red',
+    'JoeChar Sigmoid': 'purple',
+    'JoeChar Linear': 'brown',
+    'One-Hot': 'cyan',
+    'JoeOhe Sigmoid': 'magenta',
+    'JoeOhe Linear': 'olive',
+    'Continuous': 'gray',
+    'No Cat': 'pink',
+}
+
+
+performance_data = {}
+for nr_bins in list_nr_bins:
+    performance_data[nr_bins] = {
+        'Reg Target': dictionary_performance_tarreg[nr_bins],
+        'Simple Target': dictionary_performance[nr_bins],
+        'GLMM': dictionary_performance_glmm[nr_bins],
+        'Ordinal': dictionary_performance_ordinal[nr_bins],
+        'JoeChar Sigmoid': dictionary_performance_joechar1[nr_bins],
+        'JoeChar Linear': dictionary_performance_joechar2[nr_bins],
+        'One-Hot': dictionary_performance_onehot[nr_bins],
+        'JoeOhe Sigmoid': dictionary_performance_joeohe1[nr_bins],
+        'JoeOhe Linear': dictionary_performance_joeohe2[nr_bins]
+    }
+
+for performance_metric in ['rmse', 'correlation']:
+    plt.figure(figsize=(20, 8))
+
+    data_to_plot = []
+    labels = []
+    colors = []
+    bin_boundaries = []
+    bin_centers = []
+
+    count = 0
+    methods_list = ['Reg Target', 'Simple Target', 'GLMM', 'Ordinal', 'JoeChar Sigmoid', 'JoeChar Linear', 'One-Hot', 'JoeOhe Sigmoid', 'JoeOhe Linear']
+
+    for nr_bins in list_nr_bins:
+        for method in methods_list:
+            data_to_plot.append(performance_data[nr_bins][method][performance_metric])
+            labels.append(f'Bins: {nr_bins}\n{method}')
+            colors.append(method_colors[method])
+
+        count += len(methods_list)
+        bin_boundaries.append(count)
+        bin_centers.append(count - len(methods_list) / 2)
+
+    data_to_plot.append(dictionary_performance_continuous[performance_metric])
+    labels.append('Continuous')
+    colors.append('gray')  
+    bin_boundaries.append(count)
+    bin_centers.append(count + 0.5)
+
+    data_to_plot.append(dictionary_performance_nocat[performance_metric])
+    labels.append('NO CAT')
+    colors.append('black')  
+    bin_boundaries.append(count+1)
+    bin_centers.append(count + 1.5)
+
+
+    box = plt.boxplot(data_to_plot, labels=labels, vert=True, patch_artist=True)
+
+    for patch, color in zip(box['boxes'], colors):
+        patch.set_facecolor(color)
+
+    for boundary in bin_boundaries[:-1]:
+      plt.axvline(boundary + 0.5, color='gray', linestyle=':', linewidth=1)
+
+
+    y_max = max([max(group) if len(group) > 0 else 0 for group in data_to_plot])
+
+    for center, nr_bins in zip(bin_centers[:-2], list_nr_bins):
+        plt.text(center + 0.5, y_max * 0.95, f'{nr_bins} cat', ha='center', va='bottom', fontsize=10, weight='bold')
+
+    plt.text(bin_centers[-1], y_max * 0.95, 'Extra', ha='center', va='bottom', fontsize=10, weight='bold')
+
+
+    legend_patches = [Patch(facecolor=color, label=method) for method, color in method_colors.items()]
+
+    plt.legend(handles=legend_patches, bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    plt.xlabel('Combination of Number of Bins and Method')
+    plt.ylabel(performance_metric.upper())
+    plt.title(f'Distribution of {performance_metric.upper()} Across Methods for Different Binning Strategies')
+    plt.xticks([])
+    plt.tight_layout()
+    plt.grid(True, axis='y')
+    plt.savefig(which_open+'simulated_regression_interaction_'+performance_metric+'.png')
+    plt.show()
+
+results_to_save = {
+    'dictionary_results': dictionary_results,
+    'dictionary_results_tarreg': dictionary_results_tarreg,
+    'dictionary_results_joechar1': dictionary_results_joechar1,
+    'dictionary_results_joechar2': dictionary_results_joechar2,
+    'dictionary_results_joeohe1': dictionary_results_joeohe1,
+    'dictionary_results_joeohe2': dictionary_results_joeohe2,
+    'dictionary_results_glmm': dictionary_results_glmm,
+    'dictionary_results_onehot': dictionary_results_onehot,
+    'dictionary_results_ordinal': dictionary_results_ordinal,
+    'dictionary_results_continuous': dictionary_results_continuous,
+    'dictionary_results_nocat': dictionary_results_nocat,
+    'dictionary_nr_obs_cat': dictionary_nr_obs_cat,
+    'dictionary_relative_entropy': dictionary_relative_entropy,
+    'dictionary_performance': dictionary_performance,
+    'dictionary_performance_tarreg': dictionary_performance_tarreg,
+    'dictionary_performance_joechar1': dictionary_performance_joechar1,
+    'dictionary_performance_joechar2': dictionary_performance_joechar2,
+    'dictionary_performance_joeohe1':dictionary_performance_joeohe1,
+    'dictionary_performance_joeohe2':dictionary_performance_joeohe2,
+    'dictionary_performance_glmm': dictionary_performance_glmm,
+    'dictionary_performance_onehot': dictionary_performance_onehot,
+    'dictionary_performance_ordinal': dictionary_performance_ordinal,
+    'dictionary_performance_continuous': dictionary_performance_continuous,
+    'dictionary_performance_nocat': dictionary_performance_nocat,
+    'list_nr_bins': list_nr_bins
+}
+
+with open(which_open+'results_regression_int.pkl', 'wb') as f:
+    pickle.dump(results_to_save, f)
+
+
+
+
+
