@@ -3,7 +3,7 @@
 This repository contains the code for the paper "Categorical Encoding as Joint Optimisation in Predictive Modelling" by Iris-Ioana Roatis, Niall Adams, and Edward AK Cohen.
 
 Python Scripts:
-- plotting_motivating_example.py: Generates the plots for the motivating example from the paper's introduction. - Produces Fig 1.
+- plotting_motivating_example.py: Generates the plots for the motivating example from the paper's introduction (showing combinations of encoders and 2 prediction models). - Produces Fig 1.
 
 
 - binary_classification_real.py: Runs the binary classification experiments on real-world datasets.
