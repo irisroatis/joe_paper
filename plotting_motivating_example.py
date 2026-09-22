@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, brier_score_loss
 from sklearn.linear_model import LogisticRegression
+# from sklearn.tree import DecisionTreeClassifier
+from sklearn.naive_bayes import GaussianNB
 from category_encoders import TargetEncoder, OneHotEncoder, GLMMEncoder
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -19,7 +21,7 @@ import matplotlib.patches as mpatches
 
 
 
-def generate_data(N, seed=None):
+def generate_data(N, seed=None, save=False, cat1_effects = None):
 
     if seed is not None:
         np.random.seed(seed)
@@ -28,7 +30,9 @@ def generate_data(N, seed=None):
     how_many_categories = 250
     cat1_levels = [f"cat1_{i}" for i in range(how_many_categories)]
     cat1 = np.random.choice(cat1_levels, N, p=[1/how_many_categories]*how_many_categories)
-    cat1_effects = {lvl: np.random.normal(0, 0.5) for lvl in cat1_levels}
+    
+    if save:
+        cat1_effects = {lvl: np.random.normal(0, 0.5) for lvl in cat1_levels}
     
     # Generate continuous features first
     cont1 = np.random.normal(0, 1, N)
@@ -47,10 +51,15 @@ def generate_data(N, seed=None):
     
     probs = 1 / (1 + np.exp(-logits))
     y = np.random.binomial(1, probs)
-    return pd.DataFrame({'cat1': cat1, 'cat2': cat2, 'cont1': cont1, 'cont2': cont2, 'y': y})
+    
+    if save:
+        return pd.DataFrame({'cat1': cat1, 'cat2': cat2, 'cont1': cont1, 'cont2': cont2, 'y': y}), cat1_effects
+    else:
+        return pd.DataFrame({'cat1': cat1, 'cat2': cat2, 'cont1': cont1, 'cont2': cont2, 'y': y})
+
 
 # Fixed test set for consistent evaluation
-df_test = generate_data(10000, seed=999)
+df_test, cat1_effects = generate_data(10000, seed=999, save = True)
 X_test = df_test.drop('y', axis=1)
 y_test = df_test['y']
 
@@ -62,7 +71,14 @@ def evaluate_logistic_model(X_train_enc, X_test_enc, y_train, y_test):
     preds = clf.predict_proba(X_test_enc)[:, 1]
     auc = roc_auc_score(y_test, preds)
     brier = brier_score_loss(y_test, preds)
-    return auc, brier
+    
+    clf_tree = GaussianNB()
+    clf_tree.fit(X_train_enc, y_train)
+    preds_tree = clf_tree.predict_proba(X_test_enc)[:, 1]
+    auc_tree = roc_auc_score(y_test, preds_tree)
+    brier_tree= brier_score_loss(y_test, preds_tree)
+    
+    return auc, brier, auc_tree, brier_tree
 
 
 def get_encoded_data(encoder_cat1, encoder_cat2, X_train, y_train, X_test):
@@ -98,7 +114,7 @@ def get_encoded_data(encoder_cat1, encoder_cat2, X_train, y_train, X_test):
 # Run a single training experiment with all 9 combinations
 def run_single_experiment(seed=None):
 
-    df_train = generate_data(1000, seed=seed)
+    df_train = generate_data(1000, seed=seed, save = False, cat1_effects = cat1_effects)
     X_train = df_train.drop('y', axis=1)
     y_train = df_train['y']
 
@@ -124,8 +140,8 @@ def run_single_experiment(seed=None):
         )
         
         # Evaluate the model
-        auc, brier = evaluate_logistic_model(X_train_enc, X_test_enc, y_train, y_test)
-        run_results[strategy_name] = {'auc': auc, 'brier': brier}
+        auc, brier, auc_tree, brier_tree = evaluate_logistic_model(X_train_enc, X_test_enc, y_train, y_test)
+        run_results[strategy_name] = {'auc': auc, 'brier': brier, 'auc_tree':auc_tree, 'brier_tree': brier_tree}
         
     return run_results
 
@@ -139,9 +155,11 @@ for seed in range(n_runs):
     
     for strategy_name, metrics in run_results.items():
         if strategy_name not in all_results:
-            all_results[strategy_name] = {'AUC': [], 'Brier': []}
+            all_results[strategy_name] = {'AUC': [], 'Brier': [], 'AUC_tree':[], 'Brier_tree':[]}
         all_results[strategy_name]['AUC'].append(metrics['auc'])
         all_results[strategy_name]['Brier'].append(metrics['brier'])
+        all_results[strategy_name]['AUC_tree'].append(metrics['auc_tree'])
+        all_results[strategy_name]['Brier_tree'].append(metrics['brier_tree'])
 
 
 df_auc_results = pd.DataFrame({
@@ -150,6 +168,13 @@ df_auc_results = pd.DataFrame({
 df_brier_results = pd.DataFrame({
     name: metrics['Brier'] for name, metrics in all_results.items()
 })
+df_auctree_results = pd.DataFrame({
+    name: metrics['AUC_tree'] for name, metrics in all_results.items()
+})
+df_briertree_results = pd.DataFrame({
+    name: metrics['Brier_tree'] for name, metrics in all_results.items()
+})
+
 
 # Define base colors in RGB tuples (0-1 range)
 base_colors = {
@@ -189,37 +214,90 @@ for name in df_auc_results.columns:
         color_dict[name] = blended_colors_ordered[key]
 
 
+# Melt all four result tables
 df_auc_melt = df_auc_results.melt(var_name='Encoding Strategy', value_name='ROC AUC')
 df_brier_melt = df_brier_results.melt(var_name='Encoding Strategy', value_name='Brier Score')
+df_auctree_melt = df_auctree_results.melt(var_name='Encoding Strategy', value_name='ROC AUC')
+df_briertree_melt = df_briertree_results.melt(var_name='Encoding Strategy', value_name='Brier Score')
 
-fig, axes = plt.subplots(1, 2, figsize=(18, 8))
+# 2x2 figure
+fig, axes = plt.subplots(2, 2, figsize=(18, 14))
 
-sns.boxplot(data=df_auc_melt, x='Encoding Strategy', y='ROC AUC', ax=axes[0],
-            palette=color_dict)
-# axes[0].set_title('ROC AUC over 50 Runs', fontsize=16)
-axes[0].set_xlabel('')
-axes[0].set_ylabel('AUC', fontsize=25, labelpad=20)
-axes[0].set_xticks([])
-axes[0].tick_params(axis='y', labelsize=20)
+# ---------------- Logistic Regression ----------------
+sns.boxplot(
+    data=df_auc_melt,
+    x='Encoding Strategy',
+    y='ROC AUC',
+    ax=axes[0, 0],
+    palette=color_dict
+)
+axes[0, 0].set_title("Logistic Regression", fontsize=18)
+axes[0, 0].set_xlabel('')
+axes[0, 0].set_ylabel('AUC', fontsize=20)
+axes[0, 0].set_xticks([])
+axes[0, 0].tick_params(axis='y', labelsize=16)
 
-sns.boxplot(data=df_brier_melt, x='Encoding Strategy', y='Brier Score', ax=axes[1],
-            palette=color_dict)
-axes[1].set_xlabel('')
-axes[1].set_ylabel('BS', fontsize=25, labelpad=20)
-axes[1].set_xticks([])
-axes[1].tick_params(axis='y', labelsize=25)
+sns.boxplot(
+    data=df_brier_melt,
+    x='Encoding Strategy',
+    y='Brier Score',
+    ax=axes[0, 1],
+    palette=color_dict
+)
+axes[0, 1].set_title("Logistic Regression", fontsize=18)
+axes[0, 1].set_xlabel('')
+axes[0, 1].set_ylabel('BS', fontsize=20)
+axes[0, 1].set_xticks([])
+axes[0, 1].tick_params(axis='y', labelsize=16)
 
+# ----------------  Naive Bayes ----------------
+sns.boxplot(
+    data=df_auctree_melt,
+    x='Encoding Strategy',
+    y='ROC AUC',
+    ax=axes[1, 0],
+    palette=color_dict
+)
+axes[1, 0].set_title("Naive Bayes", fontsize=18)
+axes[1, 0].set_xlabel('')
+axes[1, 0].set_ylabel('AUC', fontsize=20)
+axes[1, 0].set_xticks([])
+axes[1, 0].tick_params(axis='y', labelsize=16)
 
-legend_patches = [mpatches.Patch(color=color_dict[strategy], label=label)
-                  for strategy, label in zip(df_auc_results.columns, two_line_labels)]
+sns.boxplot(
+    data=df_briertree_melt,
+    x='Encoding Strategy',
+    y='Brier Score',
+    ax=axes[1, 1],
+    palette=color_dict
+)
+axes[1, 1].set_title("Naive Bayes", fontsize=18)
+axes[1, 1].set_xlabel('')
+axes[1, 1].set_ylabel('BS', fontsize=20)
+axes[1, 1].set_xticks([])
+axes[1, 1].tick_params(axis='y', labelsize=16)
 
-fig.legend(handles=legend_patches, loc='lower center', ncol=5, fontsize=25, frameon=True,
-           bbox_to_anchor=(0.5, -0.2))
+# Legend
+legend_patches = [
+    mpatches.Patch(color=color_dict[strategy], label=label)
+    for strategy, label in zip(df_auc_results.columns, two_line_labels)
+]
 
-plt.tight_layout(rect=[0, 0.05, 1, 0.95], w_pad=7.0)  
+fig.legend(
+    handles=legend_patches,
+    loc='lower center',
+    ncol=5,
+    fontsize=20,
+    frameon=True,
+    bbox_to_anchor=(0.5, -0.08)
+)
 
-##### save where wanted
-plt.savefig('/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/example_plot.pdf', bbox_inches='tight')
+plt.tight_layout(rect=[0, 0.08, 1, 1], h_pad=3.0, w_pad=3.0)
+
+plt.savefig(
+    '/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/example_plot.pdf',
+    bbox_inches='tight'
+)
 
 plt.show()
 
@@ -270,6 +348,5 @@ for name1, name2 in itertools.combinations(strategy_names, 2):
         # 't-test p-value': f'{t_test_p:.4f}',
         # 'Wilcoxon p-value': f'{wilcoxon_p:.4f}'
     })
-
 
 
