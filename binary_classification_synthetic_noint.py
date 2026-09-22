@@ -66,13 +66,15 @@ class SmallNetwork(Layer):
     def build(self, input_shape):
         self.dense_layers = []
         for units in self.units:
-            self.dense_layers.append(Dense(units, activation=self.activation, kernel_initializer=tf.keras.initializers.Zeros()))
+            self.dense_layers.append(Dense(units, activation=self.activation,  kernel_initializer=tf.keras.initializers.GlorotUniform(seed = 45)))
 
     def call(self, inputs):
         h = inputs
         for dense_layer in self.dense_layers:
             h = dense_layer(h)
         return h
+    
+    
 
 def calculate_relative_entropy(series):
   """Calculates normalised entropy for a pandas Series (categorical feature)."""
@@ -84,13 +86,13 @@ def calculate_relative_entropy(series):
   return entropy / np.log2(cardinality)
 
 
-beta_1 = 0.1
+beta_1 = 0.5
 beta_2 = -0.15
 beta_3 = 0.2
 beta_4 = 0.3
-total_epochs = 250
+total_epochs = 500
 
-which_open = '/home/ir318/trial_experiments/'
+which_open = '/home/ir318/new_add_exp/'
 
 
 dictionary_results = {}
@@ -122,7 +124,19 @@ dictionary_performance_continuous = {'accuracy':[],'auc':[],'f1':[], 'logloss':[
 dictionary_performance_nocat = {'accuracy':[],'auc':[],'f1':[], 'logloss':[], 'brier':[]} # Changed
 
 # --- Data Simulation (Modified for Binary Target) ---
-X = np.random.multivariate_normal([0,0,0], np.identity(3),20000)
+want_correlated = True
+
+if want_correlated:
+    X = np.random.multivariate_normal(
+        mean=[0, 0, 0],
+        cov=np.array([[1.0, 0.6, 0.0],[0.6, 1.0, 0.0],[0.0, 0.0, 1.0]]),
+        size=20000)
+else:
+    X = np.random.multivariate_normal(
+        mean=[0, 0, 0],
+        cov=np.identity(3),
+        size=20000)
+    
 x_1 = X[:,0]
 x_2 = X[:,1]
 x_3 = X[:,2]
@@ -131,8 +145,11 @@ x_3 = X[:,2]
 # Using a sigmoid to transform a linear combination into a probability, then binarize
 # linear_combination = beta_1 * x_1 + beta_2 * x_2 + beta_3 * x_3 + beta_4 * x_1 * x_2
 linear_combination = beta_1 * x_1 + beta_2 * x_2 + beta_3 * x_3
-probabilities = 1 / (1 + np.exp(-linear_combination + np.random.normal(0, 0.3, 20000))) # Add some noise
-y = (probabilities > 0.5).astype(int) # Binarize at 0.5 threshold
+probabilities = 1 / (1 + np.exp(-linear_combination)) # Add some noise
+# probabilities = 1 / (1 + np.exp(-linear_combination + np.random.normal(0, 0.3, 20000))) # Add some noise
+
+#y = (probabilities > 0.5).astype(int) # Binarize at 0.5 threshold
+y = np.random.binomial(1, probabilities).astype(int) # Bernoulli trials
 
 target_variable = 'y'
 categorical_variables = ['x_1']
@@ -142,6 +159,7 @@ binary_variables = []
 indices_test = random.sample(range(20000), 10000)
 
 list_nr_bins = [50, 100, 150, 200, 250, 300]
+# list_nr_bins = [50]
 
 for each_nr_bins in list_nr_bins:
     dictionary_results[each_nr_bins] = {'est_b1':[],'est_b2':[],'est_b3':[]}
@@ -182,7 +200,9 @@ for i in range(50):
         df = pd.DataFrame({'x_1': x1_binned, 'x_2': x_2, 'x_3': x_3, 'y': y})
         df_test = df.iloc[indices_test]
         df_all_train = df.drop(indices_test)
-        df_train = df_all_train.sample(n = 1000)
+        df_train_val = df_all_train.sample(n = 2000)
+        df_train = df_train_val.sample(n = 1000)
+        df_val = df_train_val.drop(df_train.index)
 
         train_sample_indices = df_train.index
 
@@ -197,6 +217,21 @@ for i in range(50):
 
         relative_entropy = calculate_relative_entropy(df_train['x_1'])
         dictionary_relative_entropy[nr_bins_x1].append(relative_entropy)
+        
+        
+        early_stopping = tf.keras.callbacks.EarlyStopping(
+            monitor='val_loss',
+            patience=30,
+            restore_best_weights=True, verbose = 0
+        )
+        
+        reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.5,
+            patience=30,
+            min_lr=1e-5,
+            verbose=0
+        )
 
         #### CONTINUOUS
 
@@ -385,14 +420,16 @@ for i in range(50):
         # dictionary_all_categorical_columns_negatives = {}
         dictionary_all_categorical_columns_overallmean = {}
         # dictionary_all_categorical_columns_overallstd = {}
+        dictionary_all_categorical_columns_count = {}
         
         
         for which_column_to_categories in categorical_variables:
-            categories = df[which_column_to_categories].unique().tolist()
+            categories = df_train[which_column_to_categories].unique().tolist()
             dict_whichcolumn_pos = {}
             # dict_whichcolumn_neg = {}
             dict_whichcolumn_overallmean = {}
             # dict_whichcolumn_overallstd = {}
+            dict_whichcolumn_count = {} 
             overall_mean = np.mean(df_train[target_variable])
             # overall_std = np.std(df_train[target_variable])
             for cat in categories:
@@ -402,21 +439,27 @@ for i in range(50):
                     # dict_whichcolumn_neg[cat] = np.std(which_cat[target_variable])
                     dict_whichcolumn_overallmean[cat] = overall_mean
                     # dict_whichcolumn_overallstd[cat] = overall_std
+                    dict_whichcolumn_count[cat] = which_cat.shape[0] 
                 else:
                     dict_whichcolumn_pos[cat] = 0
                     # dict_whichcolumn_neg[cat] = 0
                     dict_whichcolumn_overallmean[cat] = overall_mean
                     # dict_whichcolumn_overallstd[cat] = overall_std
+                    dict_whichcolumn_count[cat] = 0 
         
             dictionary_all_categorical_columns_positives[which_column_to_categories] = dict_whichcolumn_pos
             # dictionary_all_categorical_columns_negatives[which_column_to_categories] = dict_whichcolumn_neg
             dictionary_all_categorical_columns_overallmean[which_column_to_categories] = dict_whichcolumn_overallmean
             # dictionary_all_categorical_columns_overallstd[which_column_to_categories] = dict_whichcolumn_overallstd
+            dictionary_all_categorical_columns_count[which_column_to_categories] = dict_whichcolumn_count   # NEW
+
             list_columns.append(which_column_to_categories+str('_P'))
         
         X_train, y_train =  df_train.drop('y', axis=1), df_train['y']
+        X_val, y_val = df_val.drop('y', axis=1), df_val['y']
         X_test, y_test = df_test.drop('y', axis=1), df_test['y']
         X_train_mod_1 = X_train.copy()
+        X_val_mod_1 = X_val.copy()
         X_test_mod_1 = X_test.copy()
         
         for which_column_to_categories in categorical_variables:
@@ -425,6 +468,9 @@ for i in range(50):
             # X_train_mod_1[which_column_to_categories+str('_OS')] = X_train_mod_1[which_column_to_categories].copy()
             X_train_mod_1.rename(columns={which_column_to_categories: which_column_to_categories+str('_P')}, inplace=True)
         
+            X_val_mod_1[which_column_to_categories+str('_OM')] = X_val_mod_1[which_column_to_categories].copy()
+            X_val_mod_1.rename(columns={which_column_to_categories: which_column_to_categories+str('_P')}, inplace=True)
+
             # X_test_mod_1[which_column_to_categories+str('_N')] = X_test_mod_1[which_column_to_categories].copy()
             X_test_mod_1[which_column_to_categories+str('_OM')] = X_test_mod_1[which_column_to_categories].copy()
             # X_test_mod_1[which_column_to_categories+str('_OS')] = X_test_mod_1[which_column_to_categories].copy()
@@ -434,6 +480,8 @@ for i in range(50):
             # dic_neg = dictionary_all_categorical_columns_negatives[which_column_to_categories]
             dic_overallmean = dictionary_all_categorical_columns_overallmean[which_column_to_categories]
             # dic_overallstd = dictionary_all_categorical_columns_overallstd[which_column_to_categories]
+            dic_count = dictionary_all_categorical_columns_count[which_column_to_categories]     # NEW
+
         
             # test_this_column = pd.DataFrame(columns=['cat','mean','std','o_m','o_s'])
             test_this_column = pd.DataFrame(columns=['cat','mean','o_m'])
@@ -442,11 +490,14 @@ for i in range(50):
             for cat in dic_pos.keys():
                 # n = dic_neg[cat]
                 p = dic_pos[cat]
-                o_mean = dic_overallmean[cat]
+                # o_mean = dic_overallmean[cat] 
+                o_mean = dic_count[cat] / len(df_train)
                 # o_std = dic_overallstd[cat]
                 # X_train_mod_1[which_column_to_categories+4str('_N')] =    X_train_mod_1[which_column_to_categories+str('_N')].replace(cat, n)
                 X_train_mod_1[which_column_to_categories+str('_P')] =    X_train_mod_1[which_column_to_categories+str('_P')].replace(cat, p)
                 X_train_mod_1[which_column_to_categories+str('_OM')] =    X_train_mod_1[which_column_to_categories+str('_OM')].replace(cat, o_mean)
+                X_val_mod_1[which_column_to_categories+str('_P')] = X_val_mod_1[which_column_to_categories+str('_P')].replace(cat, p)
+                X_val_mod_1[which_column_to_categories+str('_OM')] = X_val_mod_1[which_column_to_categories+str('_OM')].replace(cat, o_mean)
                 # X_train_mod_1[which_column_to_categories+str('_OS')] =    X_train_mod_1[which_column_to_categories+str('_OS')].replace(cat, o_std)
                 # X_test_mod_1[which_column_to_categories+str('_N')] = X_test_mod_1[which_column_to_categories+str('_N')].replace(cat, n)
                 X_test_mod_1[which_column_to_categories+str('_P')] = X_test_mod_1[which_column_to_categories+str('_P')].replace(cat, p)
@@ -466,17 +517,31 @@ for i in range(50):
         
         list_columns = list_columns+continuous_variables+binary_variables
         
+        for which_column_to_categories in categorical_variables:
+            p_col = which_column_to_categories+str('_P')
+            om_col = which_column_to_categories+str('_OM')
+            X_val_mod_1[p_col] = pd.to_numeric(X_val_mod_1[p_col], errors='coerce').fillna(overall_mean)
+            # X_val_mod_1[om_col] = pd.to_numeric(X_val_mod_1[om_col], errors='coerce').fillna(overall_mean)
+            X_test_mod_1[p_col] = pd.to_numeric(X_test_mod_1[p_col], errors='coerce').fillna(overall_mean)
+            # X_test_mod_1[om_col] = pd.to_numeric(X_test_mod_1[om_col], errors='coerce').fillna(overall_mean)
+            X_val_mod_1[om_col] = pd.to_numeric(X_val_mod_1[om_col], errors='coerce').fillna(0)
+            X_test_mod_1[om_col] = pd.to_numeric(X_test_mod_1[om_col], errors='coerce').fillna(0)
+
         X_train_mod_1 = X_train_mod_1[list_columns]
+        X_val_mod_1 = X_val_mod_1[list_columns]
         X_test_mod_1 = X_test_mod_1[list_columns]
         
         
         train_ds = tf.data.Dataset.from_tensor_slices((X_train_mod_1.values.astype(np.float32), y_train.values))
+        val_ds = tf.data.Dataset.from_tensor_slices((X_val_mod_1.values.astype(np.float32), y_val.values))
         test_ds = tf.data.Dataset.from_tensor_slices((X_test_mod_1.values.astype(np.float32),  y_test.values))
         f = partial(split_inputs, categorical_variables=categorical_variables)
         train_ds = train_ds.map(f)
+        val_ds = val_ds.map(f)
         test_ds = test_ds.map(f)
         
         train_ds = train_ds.shuffle(500).batch(32)
+        val_ds = val_ds.batch(32)
         test_ds = test_ds.batch(32)
         
         for combination in [ [[3,1],'sigmoid'], [[1],'linear']]:
@@ -495,8 +560,8 @@ for i in range(50):
             small_models_outputs = {k: small_models[k](inputs[k]) for k in categorical_variables}
             h =  MyLayer()(small_models_outputs, inputs)
         
-            initializer = tf.keras.initializers.GlorotUniform(seed=50)
-            opt = 'adam'
+            initializer = tf.keras.initializers.GlorotUniform(seed=45)
+            opt = tf.keras.optimizers.Adam(learning_rate=0.005)
         
             # Changed activation to 'sigmoid' for binary classification output
             outputs = Dense(1, activation='sigmoid', kernel_initializer = initializer)(h)
@@ -504,9 +569,11 @@ for i in range(50):
             # Change loss and metrics for binary classification
             if combination == [ [3,1],'sigmoid']:
                 name = 'JoeChar3Sig'
+                
                 model1 = Model(inputs=inputs, outputs=outputs)
-                model1.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
-                history1 = model1.fit(train_ds, epochs = total_epochs, validation_data= test_ds,validation_freq=10, callbacks=[], verbose = 0)
+
+                model1.compile(loss='binary_crossentropy',optimizer=opt,metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
+                history1 = model1.fit(train_ds, validation_data=val_ds, epochs=total_epochs, callbacks=[early_stopping, reduce_lr], verbose=0)
                 y_pred_proba_keras = model1.predict(test_ds).flatten()
                 y_pred_keras = (y_pred_proba_keras > 0.5).astype(int)
         
@@ -533,7 +600,7 @@ for i in range(50):
                 model2 = Model(inputs=inputs, outputs=outputs)
                 name = 'JoeChar1Lin' 
                 model2.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
-                history2 = model2.fit(train_ds, epochs = total_epochs, validation_data= test_ds,validation_freq=10, callbacks=[], verbose = 0)
+                history2 = model2.fit(train_ds, validation_data=val_ds, epochs=total_epochs, callbacks=[early_stopping, reduce_lr], verbose=0)
                 y_pred_proba_keras = model2.predict(test_ds).flatten()
                 y_pred_keras = (y_pred_proba_keras > 0.5).astype(int)
         
@@ -582,13 +649,17 @@ for i in range(50):
                 dictionary_performance_joechar1[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM1[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
             else:
                 dictionary_performance_joechar2[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM1[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
+            
+            print(combination)
         
         ###### one hot encoding
         encoded_onehot_categories = {}
         train_objs_num = X_train.shape[0]
+        val_objs_num = X_val.shape[0]
         test_objs_num = X_test.shape[0]
         keys = []
         X_train_mod_one_hot = X_train[binary_variables + continuous_variables].copy()
+        X_val_mod_one_hot = X_val[binary_variables + continuous_variables].copy()
         X_test_mod_one_hot = X_test[binary_variables + continuous_variables].copy()
         
         how_many_cat_percolumn = []
@@ -597,24 +668,29 @@ for i in range(50):
         
         for cat in categorical_variables:
 
-            dataset = pd.concat(objs=[X_train[cat], X_test[cat], list_datasets[cat]['cat']], axis=0)
-        
-            dataset_preprocessed = pd.get_dummies(dataset, prefix=cat) # Add prefix for clarity
-        
-            train_preprocessed = dataset_preprocessed.iloc[:train_objs_num]
-            test_preprocessed = dataset_preprocessed.iloc[train_objs_num:train_objs_num+test_objs_num]
-            encoded_onehot_categories[cat] = dataset_preprocessed.iloc[train_objs_num+test_objs_num:]
+            train_categories = X_train[cat].unique().tolist()
+            train_preprocessed = pd.get_dummies(pd.Categorical(X_train[cat], categories=train_categories), prefix=cat)
+            train_preprocessed.index = X_train.index
+            val_preprocessed = pd.get_dummies(pd.Categorical(X_val[cat], categories=train_categories), prefix=cat)
+            val_preprocessed.index = X_val.index
+            test_preprocessed = pd.get_dummies(pd.Categorical(X_test[cat], categories=train_categories), prefix=cat)
+            test_preprocessed.index = X_test.index
+            categories_preprocessed = pd.get_dummies(pd.Categorical(list_datasets[cat]['cat'], categories=train_categories), prefix=cat)
+            categories_preprocessed.index = list_datasets[cat].index
+            encoded_onehot_categories[cat] = categories_preprocessed
         
             how_many_categories = train_preprocessed.shape[1]
             keys.extend(train_preprocessed.columns.tolist()) # Use actual column names
         
             X_train_mod_one_hot = pd.concat([X_train_mod_one_hot, train_preprocessed], axis = 1)
+            X_val_mod_one_hot = pd.concat([X_val_mod_one_hot, val_preprocessed], axis = 1)
             X_test_mod_one_hot = pd.concat([X_test_mod_one_hot, test_preprocessed], axis = 1)
         
             how_many_cat_percolumn.append(how_many_categories)
             how_many_cat_percolumn_everything.append(how_many_categories + len(list_columns) - len(continuous_variables)) # Adjusted for other features
         
         X_train_mod_one_hot = X_train_mod_one_hot[keys + binary_variables + continuous_variables]
+        X_val_mod_one_hot = X_val_mod_one_hot[keys + binary_variables + continuous_variables]
         X_test_mod_one_hot = X_test_mod_one_hot[keys + binary_variables + continuous_variables]
         
         result = list(set(list_columns) - set(continuous_variables))
@@ -622,6 +698,10 @@ for i in range(50):
         X_train_oheandchar = X_train_mod_one_hot.copy()
         X_train_oheandchar[result] = X_train_mod_1[result]
         X_train_oheandchar = X_train_oheandchar[keys + result + binary_variables + continuous_variables]
+
+        X_val_oheandchar = X_val_mod_one_hot.copy()
+        X_val_oheandchar[result] = X_val_mod_1[result]
+        X_val_oheandchar = X_val_oheandchar[keys + result + binary_variables + continuous_variables]
         
         X_test_oheandchar = X_test_mod_one_hot.copy()
         X_test_oheandchar[result] = X_test_mod_1[result]
@@ -629,15 +709,19 @@ for i in range(50):
         
         
         X_train_mod_one_hot = X_train_mod_one_hot.values
+        X_val_mod_one_hot = X_val_mod_one_hot.values
         X_test_mod_one_hot = X_test_mod_one_hot.values
         
         train_ds_onehot = tf.data.Dataset.from_tensor_slices((X_train_mod_one_hot.astype(np.float32), y_train))
+        val_ds_onehot = tf.data.Dataset.from_tensor_slices((X_val_mod_one_hot.astype(np.float32), y_val))
         test_ds_onehot = tf.data.Dataset.from_tensor_slices((X_test_mod_one_hot.astype(np.float32), y_test))
         
         f = partial(split_inputs_onehot, categorical_variables=categorical_variables, how_many_cat_percolumn = how_many_cat_percolumn)
         train_ds_onehot = train_ds_onehot.map(f)
+        val_ds_onehot = val_ds_onehot.map(f)
         test_ds_onehot = test_ds_onehot.map(f)
         train_ds_onehot = train_ds_onehot.batch(32)
+        val_ds_onehot = val_ds_onehot.batch(32)
         test_ds_onehot = test_ds_onehot.batch(32)
         
         
@@ -655,19 +739,19 @@ for i in range(50):
             small_models_outputs_onehot = {k: small_models_onehot[k](inputs_onehot[k]) for k in categorical_variables}
             h = MyLayer()(small_models_outputs_onehot, inputs_onehot)
         
-            initializer = tf.keras.initializers.GlorotUniform(seed=50)
+            initializer = tf.keras.initializers.GlorotUniform(seed=45)
         
             # Change activation to 'sigmoid' for binary classification output
             outputs_onehot = Dense(1, activation='sigmoid', kernel_initializer = initializer)(h)
         
-            opt = 'adam'
+            opt = tf.keras.optimizers.Adam(learning_rate=0.005)
         
             if combination == [ [3,1],'sigmoid']:
+                
                 name = 'JoeOhe3Sig'
                 model_onehot1 = Model(inputs=inputs_onehot, outputs=outputs_onehot)
                 model_onehot1.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
-                history_joeohe1 = model_onehot1.fit(train_ds_onehot, epochs = total_epochs, validation_data= test_ds_onehot,validation_freq=10,verbose = 0)
-        
+                history_joeohe1 = model_onehot1.fit(train_ds_onehot, validation_data=val_ds_onehot, epochs=total_epochs, callbacks=[early_stopping, reduce_lr], verbose=0)
                 y_pred_proba_keras = model_onehot1.predict(test_ds_onehot).flatten()
                 y_pred_keras = (y_pred_proba_keras > 0.5).astype(int) # Binarize predictions
         
@@ -715,7 +799,7 @@ for i in range(50):
                 name = 'JoeOhe1Lin'
                 model_onehot2.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
         
-                history_joeohe2 = model_onehot2.fit(train_ds_onehot, epochs = total_epochs, validation_data= test_ds_onehot,validation_freq=10,verbose = 0)
+                history_joeohe2 = model_onehot2.fit(train_ds_onehot, validation_data=val_ds_onehot, epochs=total_epochs, callbacks=[early_stopping, reduce_lr], verbose=0)
         
                 y_pred_proba_keras = model_onehot2.predict(test_ds_onehot).flatten()
                 y_pred_keras = (y_pred_proba_keras > 0.5).astype(int) # Binarize predictions
@@ -751,7 +835,7 @@ for i in range(50):
                   X_test_encoded_usingM6[categorical_variables[index_cat]].replace(list_datasets[categorical_variables[index_cat]]['cat'].tolist(), list_datasets[categorical_variables[index_cat]][name].tolist(), inplace=True)
         
                 dictionary_performance_joeohe2[nr_bins_x1]['correlation'].append(np.corrcoef(X_train_encoded_usingM6[categorical_variables[0]].tolist(), df_train_cont[categorical_variables[0]].tolist())[0,1])
-        
+            print(combination)
 
 
 
@@ -853,7 +937,10 @@ for performance_metric in ['accuracy', 'auc', 'f1', 'logloss', 'brier']:
     plt.grid(True, axis='y')
     
     # change where to save
-    plt.savefig(which_open+'simulated_binary_classification_no_interaction_'+performance_metric+'.png')
+    if want_correlated:
+        plt.savefig(which_open+'simulated_binary_classification_correlation_'+performance_metric+'.png')
+    else:
+        plt.savefig(which_open+'simulated_binary_classification_no_interaction_'+performance_metric+'.png')
     plt.show()
 
 results_to_save = {
@@ -887,5 +974,10 @@ results_to_save = {
 }
 
 #  saving results (for later plotting)
-with open(which_open+'results_binary_classification_synthetic_noint.pkl', 'wb') as f:
-    pickle.dump(results_to_save, f)
+if want_correlated:
+    with open(which_open+'results_binary_classification_synthetic_correlation.pkl', 'wb') as f:
+        pickle.dump(results_to_save, f)
+else:
+    with open(which_open+'results_binary_classification_synthetic_noint.pkl', 'wb') as f:
+        pickle.dump(results_to_save, f)
+    
