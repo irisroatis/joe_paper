@@ -13,9 +13,9 @@ import numpy as np
 from matplotlib.patches import Patch
 
 # --- Load results ---
-intnoint = 'noint'
+intnoint = 'noint' # or 'correlation'
 which_one = 'results_binary_classification_synthetic_'+intnoint+'.pkl'
-with open("/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/trial_experiments/"+which_one, "rb") as f:
+with open("/Users/roatisiris/Desktop/results_final/new_add_exp/"+which_one, "rb") as f:
     results = pickle.load(f)
 
 # Extract dictionaries
@@ -255,9 +255,12 @@ plt.tight_layout(rect=[0, 0.08, 1, 0.95])
 
 # Save
 if 'noint' in which_one:
-    plt.savefig('/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/binary_noint.pdf', bbox_inches='tight')
+    plt.savefig('/Users/roatisiris//Desktop/results_final/new_add_exp/binary_noint.pdf', bbox_inches='tight')
+elif 'correlation' in which_one:
+    plt.savefig('/Users/roatisiris/Desktop/results_final/new_add_exp/binary_correlation.pdf', bbox_inches='tight')
 else:
-    plt.savefig('/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/binary_int.pdf', bbox_inches='tight')
+    plt.savefig('/Users/roatisiris/Desktop/results_final/new_add_exp/binary_int.pdf', bbox_inches='tight')
+
 
 plt.show()
 plt.close()
