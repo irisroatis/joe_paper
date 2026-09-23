@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
 
-which_one = 'results_regression_int.pkl'
-# which_one = 'results_regression_noint.pkl'
+# which_one = 'results_regression_int.pkl'
+# which_one = 'results_regression_correlation.pkl'
+which_one = 'results_regression_noint.pkl'
 
-with open("/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/trial_experiments/"+which_one, "rb") as f:
+with open("/Users/roatisiris/Desktop/results_final/new_add_exp/"+which_one, "rb") as f:
     results = pickle.load(f)
 
 # Extract dictionaries
@@ -197,9 +198,11 @@ plt.tight_layout(rect=[0, 0.08, 1, 0.95])
 
 # Save
 if 'noint' in which_one:
-    plt.savefig('/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/regression_noint.pdf', bbox_inches='tight')
+    plt.savefig('/Users/roatisiris/Desktop/results_final/new_add_exp/regression_noint.pdf', bbox_inches='tight')
+elif 'correlation' in which_one:
+    plt.savefig('/Users/roatisiris/Desktop/results_final/new_add_exp/regression_correlation.pdf', bbox_inches='tight')
 else:
-    plt.savefig('/Users/roatisiris/Desktop/for_cluster/final_experiments/new_again/regression_int.pdf', bbox_inches='tight')
+    plt.savefig('/Users/roatisiris/Desktop/results_final/new_add_exp/regression_int.pdf', bbox_inches='tight')
 
 plt.show()
 plt.close()
