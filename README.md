@@ -2,7 +2,7 @@
 
 This repository contains the code for the paper "Categorical Encoding as Joint Optimisation in Predictive Modelling" by Iris-Ioana Roatis, Niall Adams, and Edward AK Cohen.
 
-Python Scripts:
+##  Python Scripts:
 - plotting_motivating_example.py: Generates the plots for the motivating example from the paper's introduction (showing combinations of encoders and 2 prediction models). - Produces Fig 1.
 
 FOR BINARY CLASSIFICATION:
@@ -20,6 +20,7 @@ FOR REGRESSION:
 
 
 FOR MULTICLASS CLASSIFICATION:
+- multi_real_188.py and multi_real_41212.py: Multiclass real datasets (with ids 188 and 41212).
 
 
 
