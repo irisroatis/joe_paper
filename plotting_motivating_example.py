@@ -350,3 +350,77 @@ for name1, name2 in itertools.combinations(strategy_names, 2):
     })
 
 
+
+# Pairwise analysis for both Logistic Regression and Naive Bayes
+
+models = {
+    'Logistic Regression': {
+        'AUC': 'AUC',
+        'Brier': 'Brier'
+    },
+    'Naive Bayes': {
+        'AUC': 'AUC_tree',
+        'Brier': 'Brier_tree'
+    }
+}
+
+strategy_names = list(all_results.keys())
+results_data = []
+
+for model_name, metrics in models.items():
+
+    print(f"\n{'='*60}")
+    print(model_name)
+    print(f"{'='*60}")
+
+    for name1, name2 in itertools.combinations(strategy_names, 2):
+
+        # Paired differences across the 100 runs
+        auc_diffs = (
+            np.array(all_results[name1][metrics['AUC']])
+            - np.array(all_results[name2][metrics['AUC']])
+        )
+
+        brier_diffs = (
+            np.array(all_results[name1][metrics['Brier']])
+            - np.array(all_results[name2][metrics['Brier']])
+        )
+
+        # Mean and standard deviation of paired differences
+        auc_diff_mean = np.mean(auc_diffs)
+        auc_diff_std = np.std(auc_diffs)
+
+        brier_diff_mean = np.mean(brier_diffs)
+        brier_diff_std = np.std(brier_diffs)
+
+        # Does mean ± SD contain zero?
+        auc_contains_zero = abs(auc_diff_mean) <= auc_diff_std
+        brier_contains_zero = abs(brier_diff_mean) <= brier_diff_std
+
+        print(f"\nComparing '{name1}' vs '{name2}':")
+        print(
+            f"  AUC Difference = "
+            f"{auc_diff_mean:.4f} ± {auc_diff_std:.4f}"
+            f" | Contains zero: {auc_contains_zero}"
+        )
+        print(
+            f"  Brier Difference = "
+            f"{brier_diff_mean:.4f} ± {brier_diff_std:.4f}"
+            f" | Contains zero: {brier_contains_zero}"
+        )
+
+        results_data.append({
+            'Model': model_name,
+            'Comparison': f'{name1} vs {name2}',
+            'AUC Mean Difference': auc_diff_mean,
+            'AUC SD Difference': auc_diff_std,
+            'AUC Mean ± SD Contains Zero': auc_contains_zero,
+            'Brier Mean Difference': brier_diff_mean,
+            'Brier SD Difference': brier_diff_std,
+            'Brier Mean ± SD Contains Zero': brier_contains_zero
+        })
+
+
+# Convert results to DataFrame
+df_pairwise_results = pd.DataFrame(results_data)
+
