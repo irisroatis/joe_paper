@@ -22,6 +22,9 @@ FOR REGRESSION:
 FOR MULTICLASS CLASSIFICATION:
 - multi_real_188.py and multi_real_41212.py: Multiclass real datasets (with ids 188 and 41212).
 
+FOR SURVIVAL:
+- 
+
 
 
 
