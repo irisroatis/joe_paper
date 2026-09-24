@@ -22,8 +22,9 @@ FOR REGRESSION:
 FOR MULTICLASS CLASSIFICATION:
 - multi_real_188.py and multi_real_41212.py: Multiclass real datasets (with ids 188 and 41212).
 
-FOR SURVIVAL:
-- 
+FOR SURVIVAL: 
+- JOE+km(cluster_noncluster).ipynb: Code that implements the JOE+KM with options of doing both the sinusoidal risk option (EXPERIMENT_TYPE = 'noncluster') and the latent cluster structure of risks (EXPERIMENT_TYPE = 'cluster') - Produces Fig
+- JOE+km_real(support).ipynb: Code that implements the JOE+KM for real data (SUPPORT) - Produces Fig 
 
 
 
