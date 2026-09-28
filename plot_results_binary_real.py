@@ -17,17 +17,11 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
 
-# ------------------------------------------------------------
-# Load colors
-# ------------------------------------------------------------
+
 
 with open("method_colors.pkl", "rb") as f:
     method_colors = pickle.load(f)
 
-
-# ------------------------------------------------------------
-# Model names
-# ------------------------------------------------------------
 
 model_name_mapping = {
     'model_nocat': 'NO CAT',
@@ -57,9 +51,6 @@ methods_list = [
 ]
 
 
-# ------------------------------------------------------------
-# Dataset names
-# ------------------------------------------------------------
 
 dataset_name_mapping = {
     41211: "ames-housing",
@@ -76,9 +67,6 @@ dataset_whichones = [
 ]
 
 
-# ------------------------------------------------------------
-# Dictionaries
-# ------------------------------------------------------------
 
 processed_results = {}
 
@@ -99,9 +87,6 @@ dictionary_meanproportion = {}
 dictionary_varproportion = {}
 
 
-# ------------------------------------------------------------
-# Load results
-# ------------------------------------------------------------
 
 with open(
     '/Users/roatisiris/Desktop/results_final/new_add_exp/results.pkl',
@@ -110,9 +95,7 @@ with open(
     results = pickle.load(f)
 
 
-# ------------------------------------------------------------
-# Process results
-# ------------------------------------------------------------
+
 
 for dataset_id, dataset_results in results.items():
 
@@ -154,10 +137,7 @@ for dataset_id, dataset_results in results.items():
                 }
 
 
-# ============================================================
-# FIGURE 1
-# Model performance
-# ============================================================
+
 
 metric_names_to_plot = [
     'ROC AUC Score',
@@ -278,9 +258,6 @@ for row_index, dataset_id in enumerate(dataset_ids):
             ax.set_xticks([])
 
 
-            # ------------------------------------------------
-            # Dataset names instead of IDs
-            # ------------------------------------------------
 
             if 'AUC' in metric_name:
 
@@ -303,9 +280,7 @@ for row_index, dataset_id in enumerate(dataset_ids):
             )
 
 
-# ------------------------------------------------------------
-# Legend
-# ------------------------------------------------------------
+
 
 legend_patches = []
 legend_labels = []
@@ -357,10 +332,6 @@ plt.show()
 
 
 
-# ============================================================
-# FIGURE 2
-# Entropy, Cardinality and Proportion
-# ============================================================
 
 entropy_values = {}
 cardinality_values = {}
@@ -405,9 +376,7 @@ for dataset_id in dataset_ids:
         )
 
 
-# ------------------------------------------------------------
-# Convert dictionaries to long DataFrames
-# ------------------------------------------------------------
+
 
 def dict_to_long_df(data_dict, metric_name):
 
@@ -442,9 +411,7 @@ df_proportion = dict_to_long_df(
 )
 
 
-# ------------------------------------------------------------
-# Replace numeric IDs with readable dataset names
-# ------------------------------------------------------------
+
 
 df_entropy["Dataset"] = (
     df_entropy["Dataset"]
@@ -469,9 +436,7 @@ dataset_order = [
 ]
 
 
-# ------------------------------------------------------------
-# Create plots
-# ------------------------------------------------------------
+
 
 fig, axes = plt.subplots(
     nrows=3,
@@ -480,9 +445,7 @@ fig, axes = plt.subplots(
 )
 
 
-# ------------------------------------------------------------
-# Entropy
-# ------------------------------------------------------------
+
 
 sns.boxplot(
     ax=axes[0],
@@ -516,9 +479,6 @@ axes[0].tick_params(
 )
 
 
-# ------------------------------------------------------------
-# Cardinality
-# ------------------------------------------------------------
 
 sns.boxplot(
     ax=axes[1],
@@ -552,9 +512,6 @@ axes[1].tick_params(
 )
 
 
-# ------------------------------------------------------------
-# Proportion
-# ------------------------------------------------------------
 
 sns.boxplot(
     ax=axes[2],
@@ -588,9 +545,7 @@ axes[2].tick_params(
 )
 
 
-# ------------------------------------------------------------
-# Save second figure
-# ------------------------------------------------------------
+
 
 plt.tight_layout()
 
