@@ -21,7 +21,6 @@ from tensorflow.keras.layers import Dense, Input, Layer
 from tensorflow.keras.models import Model
 
 
-# ----------------------------- Configuration -----------------------------
 
 # DATASET_IDS = [41211, 41445, 41210, 41267]
 DATASET_IDS = [41211, 41445, 41210]
