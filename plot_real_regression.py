@@ -6,17 +6,12 @@ import pandas as pd
 import seaborn as sns
 
 
-# ============================================================
-# LOAD COLORS
-# ============================================================
 
 with open("method_colors.pkl", "rb") as f:
     method_colors = pickle.load(f)
 
 
-# ============================================================
-# MODEL NAMES
-# ============================================================
+
 
 model_name_mapping = {
     'model_nocat': 'NO CAT',
@@ -47,9 +42,7 @@ methods_list = [
 ]
 
 
-# ============================================================
-# DATASET NAMES
-# ============================================================
+
 
 dataset_name_mapping = {
     41211: "ames-housing",
@@ -65,9 +58,6 @@ dataset_whichones = [
 ]
 
 
-# ============================================================
-# LOAD RESULTS
-# ============================================================
 
 with open(
     '/Users/roatisiris/Desktop/results_final/new_add_exp/results_real.pkl',
@@ -76,9 +66,6 @@ with open(
     results = pickle.load(f)
 
 
-# ============================================================
-# PROCESS RESULTS
-# ============================================================
 
 processed_results = {}
 
@@ -125,10 +112,7 @@ for dataset_id, dataset_results in results.items():
                 }
 
 
-# ============================================================
-# FIGURE 1
-# RMSE + R-SQUARED
-# ============================================================
+
 
 metric_names_to_plot = [
     'Mean Squared Error',
@@ -263,9 +247,7 @@ for row_index, dataset_id in enumerate(dataset_ids):
             ax.set_xticks([])
 
 
-            # ------------------------------------------------
-            # Use dataset name instead of dataset ID
-            # ------------------------------------------------------------
+
 
             if 'squared' in metric_name:
 
@@ -288,9 +270,7 @@ for row_index, dataset_id in enumerate(dataset_ids):
             )
 
 
-# ============================================================
-# LEGEND
-# ============================================================
+
 
 legend_patches = [
     Patch(
@@ -325,10 +305,6 @@ plt.savefig(
 plt.show()
 
 
-# ============================================================
-# FIGURE 2
-# ENTROPY, CARDINALITY, PROPORTION
-# ============================================================
 
 entropy_values = {}
 cardinality_values = {}
@@ -363,9 +339,6 @@ for dataset_id in dataset_whichones:
         )
 
 
-# ============================================================
-# CONVERT DICTIONARIES TO LONG DATAFRAMES
-# ============================================================
 
 def dict_to_long_df(data_dict, metric_name):
 
@@ -402,9 +375,6 @@ df_proportion = dict_to_long_df(
 )
 
 
-# ============================================================
-# REPLACE IDS WITH DATASET NAMES
-# ============================================================
 
 df_entropy["Dataset"] = (
     df_entropy["Dataset"]
@@ -460,9 +430,7 @@ dataset_order = [
 ]
 
 
-# ============================================================
-# CREATE SECOND FIGURE
-# ============================================================
+
 
 fig, axes = plt.subplots(
     nrows=3,
